@@ -1,280 +1,188 @@
-#include <iostream>
-#include <vector>
-#include <queue>
-#include <omp.h>
+#include <iostream>   // For input-output (cout, endl)
+#include <omp.h>      // OpenMP library for parallel execution and timing
+#include <queue>      // Queue data structure for BFS
+#include <vector>     // Dynamic array for visited nodes
+#include <cstdio>     // C-style file handling (FILE, fprintf)
 using namespace std;
 
-class Graph {
-private:
-    int V;                              // Number of vertices
-    vector<vector<int>> graph;          // Adjacency list
+// Number of different graph sizes to test
+#define TESTS 6
 
-public:
-    // Constructor
-    Graph(int V) {
-        this->V = V;
-        graph.resize(V);
-    }
+// Array storing different values of N (number of vertices)
+int N_values[TESTS] = {1000, 2000, 3000, 4000, 6000, 8000};
 
-    // Add undirected edge
-    void addEdge(int u, int v) {
-        graph[u].push_back(v);
-        graph[v].push_back(u);
-    }
+// Adjacency matrix representation of graph
+// NOTE: Very large memory usage (~15000 x 15000 integers)
+int graph[15000][15000];
 
-    // =========================================================
-    // 1. SEQUENTIAL BFS (Standard)
-    // =========================================================
-    void sequentialBFS(int start) {
-        vector<bool> visited(V, false);
-        queue<int> q;
 
-        // Mark start visited and push
-        visited[start] = true;
-        q.push(start);        
+// ================= EDGE ADD FUNCTION =================
+// Adds an undirected edge between nodes u and v
+void addEdge(int u, int v) {
+    graph[u][v] = 1;   // Edge from u to v
+    graph[v][u] = 1;   // Edge from v to u (undirected graph)
+}
 
-        while (!q.empty()) {
-            int u = q.front();
-            q.pop();
 
-            cout << u << " ";
+// ================= SEQUENTIAL BFS =================
+// Performs Breadth First Search sequentially
+// Returns execution time
+double sequential_bfs(int start, int N) {
 
-            // Traverse neighbors
-            for (int v : graph[u]) {
-                if (!visited[v]) {
-                    visited[v] = true;   // mark visited here (important)
-                    q.push(v);
-                }
+    vector<bool> visited(N, false); // Track visited nodes
+    queue<int> q;                  // Queue for BFS traversal
+
+    double t1 = omp_get_wtime();  // Start timing
+
+    visited[start] = true;        // Mark starting node visited
+    q.push(start);                // Push start node into queue
+
+    // BFS loop
+    while (!q.empty()) {
+
+        int node = q.front();     // Get front node
+        q.pop();                 // Remove it from queue
+
+        // Traverse all adjacent nodes
+        for (int j = 0; j < N; j++) {
+
+            // If edge exists and node not visited
+            if (graph[node][j] && !visited[j]) {
+                visited[j] = true;   // Mark visited
+                q.push(j);          // Add to queue
             }
         }
-
-        cout << endl;
     }
 
-    // =========================================================
-    // 2. PARALLEL BFS (Frontier-based)
-    // =========================================================
-    void parallelBFS(int start) {
-        vector<bool> visited(V, false);
+    double t2 = omp_get_wtime();  // End timing
 
-        // Frontier stores current level nodes
-        vector<int> frontier;
-        frontier.push_back(start);
-        visited[start] = true;
+    return t2 - t1;               // Return total execution time
+}
 
-        while (!frontier.empty()) {
-            vector<int> next_frontier;
 
-            // Parallel region
-            #pragma omp parallel
+// ================= PARALLEL BFS =================
+// Attempts to parallelize BFS using OpenMP
+double parallel_bfs(int start, int N) {
+
+    vector<bool> visited(N, false); // Shared visited array
+    queue<int> q;                  // Shared queue (NOT thread-safe)
+
+    double t1 = omp_get_wtime();  // Start timing
+
+    visited[start] = true;
+    q.push(start);
+
+    // BFS loop
+    while (!q.empty()) {
+
+        int size = q.size();  // Number of nodes at current level
+
+        // Parallel loop over current level nodes
+        #pragma omp parallel for
+        for (int i = 0; i < size; i++) {
+
+            int node = -1;
+
+            // Critical section to safely access queue
+            #pragma omp critical
             {
-                // Each thread keeps local buffer (avoids contention)
-                vector<int> local_frontier;
+                if (!q.empty()) {
+                    node = q.front();
+                    q.pop();
+                }
+            }
 
-                // Distribute frontier nodes among threads
-                #pragma omp for
-                for (int i = 0; i < frontier.size(); i++) {
-                    int u = frontier[i];
+            if (node == -1) continue;
 
-                    // Explore neighbors
-                    for (int v : graph[u]) {
-                        bool added = false;
+            // Explore neighbors
+            for (int j = 0; j < N; j++) {
 
-                        // Critical section to safely update visited[]
-                        #pragma omp critical
-                        {
-                            if (!visited[v]) {
-                                visited[v] = true;
-                                added = true;
-                            }
-                        }
+                if (graph[node][j]) {
 
-                        // Push outside critical (reduces lock time)
-                        if (added) {
-                            local_frontier.push_back(v);
+                    // Critical section to update shared data
+                    #pragma omp critical
+                    {
+                        if (!visited[j]) {
+                            visited[j] = true; // Mark visited
+                            q.push(j);         // Push into queue
                         }
                     }
                 }
-
-                // Merge local buffers into global next_frontier
-                #pragma omp critical
-                {
-                    next_frontier.insert(
-                        next_frontier.end(),
-                        local_frontier.begin(),
-                        local_frontier.end()
-                    );
-                }
-            }
-
-            // Print current level (safe, outside parallel)
-            for (int u : frontier) {
-                cout << u << " ";
-            }
-            cout << endl;
-
-            // Move to next level
-            frontier = next_frontier;
-        }
-    }
-
-    // =========================================================
-    // 3. SEQUENTIAL DFS (Recursive)
-    // =========================================================
-    void sequentialDFS(int u, vector<bool> &visited) {
-        visited[u] = true;
-        cout << u << " ";
-
-        for (int v : graph[u]) {
-            if (!visited[v]) {
-                sequentialDFS(v, visited);
             }
         }
     }
 
-    // =========================================================
-    // 4. PARALLEL DFS (Task-based)
-    // =========================================================
+    double t2 = omp_get_wtime();
 
-    // Helper function
-    void parallelDFSUtil(int u, vector<bool> &visited) {
-        bool alreadyVisited = false;
+    return t2 - t1;
+}
 
-        // Critical section for visited check/update
-        #pragma omp critical
-        {
-            if (!visited[u]) {
-                visited[u] = true;
-            } else {
-                alreadyVisited = true;
-            }
-        }
 
-        // If already visited, stop
-        if (alreadyVisited) return;
-
-        // Print node (outside critical for better performance)
-        cout << u << " ";
-
-        // Explore neighbors
-        for (int v : graph[u]) {
-            bool shouldExplore = false;
-
-            // Check if neighbor is unvisited
-            #pragma omp critical
-            {
-                if (!visited[v]) {
-                    shouldExplore = true;
-                }
-            }
-
-            // Create a task for each branch
-            if (shouldExplore) {
-                #pragma omp task
-                parallelDFSUtil(v, visited);
-            }
-        }
-
-        // Wait for all child tasks (VERY IMPORTANT)
-        #pragma omp taskwait
-    }
-
-    // Entry function
-    void parallelDFS(int start) {
-        vector<bool> visited(V, false);        
-
-        #pragma omp parallel
-        {
-            // Only one thread starts recursion
-            #pragma omp single
-            {
-                parallelDFSUtil(start, visited);
-            }
-        }
-
-        cout << endl;
-    }
-
-    int getVerticesCount() {
-        return V;
-    }
-};
-
-// =========================================================
-// MAIN FUNCTION
-// =========================================================
+// ================= MAIN FUNCTION =================
 int main() {
 
-    Graph graph(7);
+    // Open file to store results
+    FILE *f = fopen("result1.txt", "w");
 
-    graph.addEdge(0, 1);
-    graph.addEdge(0, 2);
-    graph.addEdge(1, 3);
-    graph.addEdge(1, 4);
-    graph.addEdge(2, 5);
-    graph.addEdge(2, 6);
+    // Write CSV header
+    fprintf(f, "N,SEQ,PAR,SPEEDUP,CORES\n");
 
-    double start, end;
+    // Get number of available threads (cores)
+    int cores = omp_get_max_threads();
+    cout << "Cores = " << cores << endl;
 
-    cout << "\n========== BFS ==========\n";
+    // Loop through all test sizes
+    for (int t = 0; t < TESTS; t++) {
 
-    // Sequential BFS
-    start = omp_get_wtime();
-    cout << "Sequential BFS: ";
-    graph.sequentialBFS(0);
-    end = omp_get_wtime();
-    double seq_bfs = end - start;
-    cout << "Time: " << seq_bfs << " sec\n";
+        int N = N_values[t]; // Current graph size
 
-    // Parallel BFS
-    start = omp_get_wtime();
-    cout << "\nParallel BFS (Level-wise):\n";
-    graph.parallelBFS(0);
-    end = omp_get_wtime();
-    double par_bfs = end - start;
-    cout << "Time: " << par_bfs << " sec\n";
+        // ================= RESET GRAPH =================
+        for (int i = 0; i < N; i++)
+            for (int j = 0; j < N; j++)
+                graph[i][j] = 0;
 
-    // BFS Performance
-    double bfs_speedup = seq_bfs / par_bfs;
+        // ================= BUILD GRAPH =================
+        // Each node connects to next 20 nodes
+        // Creates locally dense graph
+        for (int i = 0; i < N; i++) {
+            for (int j = i + 1; j < N && j < i + 20; j++) {
+                addEdge(i, j);
+            }
+        }
 
-    cout << "BFS Speedup: " << bfs_speedup << endl;
+        // ================= PERFORMANCE TEST =================
+        double seq_total = 0, par_total = 0;
+        int runs = 5; // Number of runs for averaging
 
-    if (bfs_speedup > 1)
-        cout << "Parallel is " << (bfs_speedup - 1) * 100 << "% faster\n";
-    else
-        cout << "Parallel is " << (1 - bfs_speedup) * 100 << "% slower\n";
+        for (int r = 0; r < runs; r++) {
+            seq_total += sequential_bfs(0, N); // Sequential BFS
+            par_total += parallel_bfs(0, N);   // Parallel BFS
+        }
 
+        // Compute average times
+        double seq_time = seq_total / runs;
+        double par_time = par_total / runs;
 
-    cout << "\n========== DFS ==========\n";
+        // Calculate speedup
+        double speedup = seq_time / par_time;
 
-    // Sequential DFS
-    vector<bool> visited(7, false);
+        // Print results to console
+        cout << "N=" << N
+             << " SEQ=" << seq_time
+             << " PAR=" << par_time
+             << " SPEEDUP=" << speedup << endl;
 
-    start = omp_get_wtime();
-    cout << "Sequential DFS: ";
-    graph.sequentialDFS(0, visited);
-    cout << endl;
-    end = omp_get_wtime();
-    double seq_dfs = end - start;
-    cout << "Time: " << seq_dfs << " sec\n";
+        // Write results to file
+        fprintf(f, "%d,%lf,%lf,%lf,%d\n",
+                N, seq_time, par_time, speedup, cores);
+    }
 
-    // Parallel DFS
-    start = omp_get_wtime();
-    cout << "\nParallel DFS: ";
-    graph.parallelDFS(0);
-    end = omp_get_wtime();
-    double par_dfs = end - start;
-    cout << "Time: " << par_dfs << " sec\n";
+    // Close file
+    fclose(f);
 
-    // DFS Performance
-    double dfs_speedup = seq_dfs / par_dfs;
-
-    cout << "DFS Speedup: " << dfs_speedup << endl;
-
-    if (dfs_speedup > 1)
-        cout << "Parallel is " << (dfs_speedup - 1) * 100 << "% faster\n";
-    else
-        cout << "Parallel is " << (1 - dfs_speedup) * 100 << "% slower\n";
+    // Final message
+    // NOTE: filename mismatch bug (actual file is result.txt)
+    cout << "\nResults saved to result1.txt\n";
 
     return 0;
 }
