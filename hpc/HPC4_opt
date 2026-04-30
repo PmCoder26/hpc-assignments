@@ -1,0 +1,100 @@
+#include <cuda.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+#define RUNS 5
+
+__global__ void vector_add(float *A, float *B, float *C, int N) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) {
+        C[i] = A[i] + B[i];
+    }
+}
+
+void cpu_vector(float *A, float *B, float *C, int N) {
+    for (int i = 0; i < N; i++) {
+        C[i] = A[i] + B[i];
+    }
+}
+
+int main() {
+    printf("\n===== VECTOR ADDITION CUDA =====\n");
+
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+    int cores = prop.multiProcessorCount * 128;
+    printf("CUDA Cores = %d\n", cores);
+
+    int sizes[] = {1024, 4096, 16384, 65536, 262144, 1048576};
+    int tests = 6;
+
+    FILE *f = fopen("vector_result.txt", "w");
+    fprintf(f, "N,SEQ,PAR,SPEEDUP\n");
+
+    for (int t = 0; t < tests; t++) {
+        int N = sizes[t];
+        size_t size = N * sizeof(float);
+
+        float *h_A = (float *)malloc(size);
+        float *h_B = (float *)malloc(size);
+        float *h_C = (float *)malloc(size);
+
+        for (int i = 0; i < N; i++) {
+            h_A[i] = rand() % 100;
+            h_B[i] = rand() % 100;
+        }
+
+        float *d_A, *d_B, *d_C;
+        cudaMalloc(&d_A, size);
+        cudaMalloc(&d_B, size);
+        cudaMalloc(&d_C, size);
+
+        cudaMemcpy(d_A, h_A, size, cudaMemcpyHostToDevice);
+        cudaMemcpy(d_B, h_B, size, cudaMemcpyHostToDevice);
+
+        float seq = 0, par = 0;
+
+        for (int r = 0; r < RUNS; r++) {
+            cudaEvent_t start, stop;
+            cudaEventCreate(&start);
+            cudaEventCreate(&stop);
+
+            cudaEventRecord(start);
+            vector_add<<<(N + 255) / 256, 256>>>(d_A, d_B, d_C, N);
+            cudaEventRecord(stop);
+            cudaEventSynchronize(stop);
+
+            float ms;
+            cudaEventElapsedTime(&ms, start, stop);
+            par += ms;
+
+            cudaEventDestroy(start);
+            cudaEventDestroy(stop);
+
+            clock_t t1 = clock();
+            cpu_vector(h_A, h_B, h_C, N);
+            clock_t t2 = clock();
+            seq += (t2 - t1) * 1000.0 / CLOCKS_PER_SEC;
+        }
+
+        seq /= RUNS;
+        par /= RUNS;
+        float speedup = seq / par;
+
+        printf("N=%d | SEQ=%f ms | PAR=%f ms | SPEEDUP=%f\n", N, seq, par,
+               speedup);
+        fprintf(f, "%d,%f,%f,%f\n", N, seq, par, speedup);
+
+        cudaFree(d_A);
+        cudaFree(d_B);
+        cudaFree(d_C);
+        free(h_A);
+        free(h_B);
+        free(h_C);
+    }
+
+    fclose(f);
+    printf("\nSaved to vector_result.txt\n");
+    return 0;
+}
